@@ -1,0 +1,29 @@
+{
+  "kiana": {
+    "name": "琪亚娜 (Kiana)",
+    "desc": "崩坏3 - 琪亚娜",
+    "lang": "Chinese",
+    "model_dir": "CharacterModels/v2ProPlus/kiana/tts_models",
+    "ref_audio": "CharacterModels/v2ProPlus/kiana/这个名号，可能听上去有些吓人，但我和大家一样，都只是人类的普通一员。.wav",
+    "ref_text": "这个名号，可能听上去有些吓人，但我和大家一样，都只是人类的普通一员。",
+    "type": "custom"
+  },
+  "feibi": {
+    "name": "菲比 (Feibi)",
+    "desc": "鸣潮 - 菲比",
+    "lang": "Chinese",
+    "type": "predefined"
+  },
+  "mika": {
+    "name": "ミカ (Mika)",
+    "desc": "碧蓝档案 - 圣园未花",
+    "lang": "Japanese",
+    "type": "predefined"
+  },
+  "37": {
+    "name": "37",
+    "desc": "重返未来 - 37",
+    "lang": "English",
+    "type": "predefined"
+  }
+}

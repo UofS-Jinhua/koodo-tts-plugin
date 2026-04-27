@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>有声读书 - AI Audiobook Reader</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a2e;--border:#2a2a3e;--text:#e0e0e8;--text2:#8888a0;--accent:#6c63ff;--accent2:#ff6b9d;--glow:rgba(108,99,255,.15);--radius:16px}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+.app{display:flex;flex-direction:column;height:100vh}
+
+/* Header */
+.header{padding:16px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);background:linear-gradient(180deg,rgba(108,99,255,.05),transparent);backdrop-filter:blur(20px);position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-icon{width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.logo h1{font-size:18px;font-weight:600;background:linear-gradient(135deg,#fff,var(--text2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header-actions{display:flex;gap:8px}
+
+/* Character selector */
+.char-btn{padding:6px 14px;border-radius:20px;border:1px solid var(--border);background:var(--surface);color:var(--text2);font-size:12px;cursor:pointer;transition:.2s}
+.char-btn:hover,.char-btn.active{border-color:var(--accent);color:var(--accent);background:var(--glow)}
+
+/* Main content */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* Upload area */
+.upload-area{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:40px;gap:20px;transition:.3s}
+.upload-area.hidden{display:none}
+.drop-zone{width:100%;max-width:500px;padding:60px 40px;border:2px dashed var(--border);border-radius:var(--radius);text-align:center;cursor:pointer;transition:.3s;background:var(--surface)}
+.drop-zone:hover,.drop-zone.dragover{border-color:var(--accent);background:var(--glow);transform:scale(1.01)}
+.drop-zone svg{width:48px;height:48px;margin-bottom:16px;color:var(--text2)}
+.drop-zone h3{font-size:16px;margin-bottom:8px;color:var(--text)}
+.drop-zone p{font-size:13px;color:var(--text2)}
+.or-text{color:var(--text2);font-size:13px}
+.paste-area{width:100%;max-width:500px}
+.paste-area textarea{width:100%;height:120px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;color:var(--text);font-size:14px;resize:none;font-family:'Noto Serif SC',serif;transition:.2s}
+.paste-area textarea:focus{outline:none;border-color:var(--accent)}
+.paste-area textarea::placeholder{color:var(--text2)}
+.submit-btn{padding:10px 32px;background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:500;cursor:pointer;transition:.2s}
+.submit-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(108,99,255,.3)}
+
+/* Reader area */
+.reader-area{flex:1;display:none;flex-direction:column;overflow:hidden}
+.reader-area.active{display:flex}
+.doc-header{padding:12px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);background:var(--surface)}
+.doc-title{font-size:14px;font-weight:500;color:var(--text2)}
+.doc-info{font-size:12px;color:var(--text2)}
+.back-btn{padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:12px;cursor:pointer;transition:.2s}
+.back-btn:hover{border-color:var(--accent2);color:var(--accent2)}
+
+/* Sentences */
+.sentences{flex:1;overflow-y:auto;padding:24px;scroll-behavior:smooth}
+.sentence{padding:12px 16px;margin-bottom:8px;border-radius:12px;font-family:'Noto Serif SC',serif;font-size:17px;line-height:1.8;color:var(--text2);cursor:pointer;transition:.3s;border:1px solid transparent;position:relative}
+.sentence:hover{background:rgba(108,99,255,.05);color:var(--text)}
+.sentence.active{background:linear-gradient(135deg,rgba(108,99,255,.1),rgba(255,107,157,.05));border-color:rgba(108,99,255,.3);color:#fff;box-shadow:0 4px 20px rgba(108,99,255,.1)}
+.sentence.played{color:var(--text)}
+.sentence .idx{position:absolute;left:-8px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--text2);font-family:'Inter',sans-serif;opacity:0;transition:.2s}
+.sentence:hover .idx{opacity:.5;left:-24px}
+.sentence.loading::after{content:'';position:absolute;right:12px;top:50%;transform:translateY(-50%);width:16px;height:16px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:translateY(-50%) rotate(360deg)}}
+
+/* Player bar */
+.player-bar{padding:16px 24px;border-top:1px solid var(--border);background:linear-gradient(180deg,var(--surface),var(--surface2));display:flex;align-items:center;gap:16px;backdrop-filter:blur(20px)}
+.player-bar.hidden{display:none}
+
+/* Visualizer */
+.visualizer{display:flex;align-items:center;gap:2px;height:32px;min-width:40px}
+.visualizer .bar{width:3px;background:var(--accent);border-radius:2px;transition:height .1s;height:4px}
+.visualizer.playing .bar{animation:vbar .6s ease-in-out infinite alternate}
+.visualizer.playing .bar:nth-child(2){animation-delay:.1s}
+.visualizer.playing .bar:nth-child(3){animation-delay:.2s}
+.visualizer.playing .bar:nth-child(4){animation-delay:.3s}
+.visualizer.playing .bar:nth-child(5){animation-delay:.15s}
+@keyframes vbar{0%{height:4px;background:var(--accent)}100%{height:28px;background:var(--accent2)}}
+
+/* Controls */
+.controls{display:flex;align-items:center;gap:8px}
+.ctrl-btn{width:40px;height:40px;border-radius:50%;border:none;background:transparent;color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.2s;font-size:18px}
+.ctrl-btn:hover{background:var(--glow);color:var(--accent)}
+.ctrl-btn.play-btn{width:48px;height:48px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-size:20px}
+.ctrl-btn.play-btn:hover{transform:scale(1.05);box-shadow:0 4px 20px rgba(108,99,255,.4)}
+
+/* Progress info */
+.progress-info{flex:1;min-width:0}
+.progress-text{font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px}
+.progress-meta{font-size:11px;color:var(--text2);margin-top:2px}
+
+/* Speed control */
+.speed-ctrl{display:flex;align-items:center;gap:6px}
+.speed-ctrl label{font-size:11px;color:var(--text2)}
+.speed-ctrl select{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:12px}
+
+/* Scrollbar */
+.sentences::-webkit-scrollbar{width:6px}
+.sentences::-webkit-scrollbar-track{background:transparent}
+.sentences::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.sentences::-webkit-scrollbar-thumb:hover{background:var(--text2)}
+
+/* Loading overlay */
+.loading-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(8px)}
+.loading-overlay.hidden{display:none}
+.loading-content{text-align:center}
+.loading-spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px}
+.loading-content p{color:var(--text2);font-size:14px}
+
+/* Toast */
+.toast{position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--surface2);border:1px solid var(--border);padding:10px 20px;border-radius:10px;color:var(--text);font-size:13px;opacity:0;transition:.3s;z-index:200;pointer-events:none}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* Responsive */
+@media(max-width:768px){
+  .header{padding:12px 16px}
+  .sentences{padding:16px}
+  .sentence{font-size:15px;padding:10px 12px}
+  .player-bar{padding:12px 16px;gap:10px;flex-wrap:wrap}
+  .progress-text{max-width:200px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <header class="header" id="header">
+    <div class="logo">
+      <div class="logo-icon">📖</div>
+      <h1>有声读书</h1>
+    </div>
+    <div class="header-actions" id="charSelector">
+      <button class="char-btn" data-char="kiana">琪亚娜</button>
+      <button class="char-btn active" data-char="feibi">菲比</button>
+      <button class="char-btn" data-char="mika">ミカ</button>
+      <button class="char-btn" data-char="37">37</button>
+    </div>
+  </header>
+
+  <div class="main">
+    <!-- Upload Area -->
+    <div class="upload-area" id="uploadArea">
+      <div class="drop-zone" id="dropZone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4m0 0L8 8m4-4l4 4"/><path d="M20 16v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2"/></svg>
+        <h3>拖拽文本文件到此处</h3>
+        <p>支持 .txt 文件，UTF-8 / GBK 编码</p>
+      </div>
+      <span class="or-text">── 或者直接粘贴文字 ──</span>
+      <div class="paste-area">
+        <textarea id="pasteText" placeholder="在此粘贴要朗读的文字..."></textarea>
+      </div>
+      <button class="submit-btn" id="submitBtn">开始朗读</button>
+    </div>
+
+    <!-- Reader Area -->
+    <div class="reader-area" id="readerArea">
+      <div class="doc-header">
+        <div>
+          <span class="doc-title" id="docTitle">-</span>
+          <span class="doc-info" id="docInfo"></span>
+        </div>
+        <button class="back-btn" id="backBtn">← 返回</button>
+      </div>
+      <div class="sentences" id="sentences"></div>
+    </div>
+  </div>
+
+  <!-- Player Bar -->
+  <div class="player-bar hidden" id="playerBar">
+    <div class="visualizer" id="visualizer">
+      <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    </div>
+    <div class="controls">
+      <button class="ctrl-btn" id="prevBtn" title="上一句">⏮</button>
+      <button class="ctrl-btn play-btn" id="playBtn" title="播放/暂停">▶</button>
+      <button class="ctrl-btn" id="nextBtn" title="下一句">⏭</button>
+    </div>
+    <div class="progress-info">
+      <div class="progress-text" id="progressText">准备就绪</div>
+      <div class="progress-meta" id="progressMeta">-</div>
+    </div>
+    <div class="speed-ctrl">
+      <label>自动播放</label>
+      <input type="checkbox" id="autoPlay" checked>
+    </div>
+  </div>
+</div>
+
+<!-- Loading -->
+<div class="loading-overlay hidden" id="loadingOverlay">
+  <div class="loading-content">
+    <div class="loading-spinner"></div>
+    <p id="loadingText">正在加载...</p>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<input type="file" id="fileInput" accept=".txt" hidden>
+
+<script>
+const API = '';
+let state = { docId: null, sentences: [], currentIdx: -1, playing: false, audio: null, audioCache: {} };
+
+// Elements
+const $ = id => document.getElementById(id);
+const uploadArea = $('uploadArea'), readerArea = $('readerArea'), playerBar = $('playerBar');
+const sentencesEl = $('sentences'), playBtn = $('playBtn'), progressText = $('progressText');
+const progressMeta = $('progressMeta'), visualizer = $('visualizer'), loadingOverlay = $('loadingOverlay');
+const loadingText = $('loadingText'), dropZone = $('dropZone'), fileInput = $('fileInput');
+
+function showToast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+function showLoading(msg) { loadingText.textContent = msg; loadingOverlay.classList.remove('hidden'); }
+function hideLoading() { loadingOverlay.classList.add('hidden'); }
+
+// File upload
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('dragover'); if(e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', () => { if(fileInput.files[0]) uploadFile(fileInput.files[0]); });
+
+async function uploadFile(file) {
+  showLoading('正在解析文本...');
+  const fd = new FormData(); fd.append('file', file);
+  try {
+    const r = await fetch(API+'/api/upload', {method:'POST', body:fd});
+    if(!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    loadDocument(data);
+  } catch(e) { showToast('上传失败: '+e.message); } finally { hideLoading(); }
+}
+
+$('submitBtn').addEventListener('click', async () => {
+  const text = $('pasteText').value.trim();
+  if(!text) return showToast('请输入文字');
+  showLoading('正在解析文本...');
+  try {
+    const r = await fetch(API+'/api/text', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text, filename:'粘贴文本'})});
+    if(!r.ok) throw new Error(await r.text());
+    loadDocument(await r.json());
+  } catch(e) { showToast('解析失败: '+e.message); } finally { hideLoading(); }
+});
+
+function loadDocument(data) {
+  state.docId = data.doc_id;
+  state.sentences = data.sentences;
+  state.currentIdx = -1;
+  state.audioCache = {};
+  $('docTitle').textContent = data.filename;
+  $('docInfo').textContent = ` · ${data.total_sentences} 句`;
+  renderSentences();
+  uploadArea.classList.add('hidden');
+  readerArea.classList.add('active');
+  playerBar.classList.remove('hidden');
+  progressText.textContent = '点击句子或按播放开始朗读';
+  progressMeta.textContent = `共 ${data.total_sentences} 句`;
+}
+
+function renderSentences() {
+  sentencesEl.innerHTML = state.sentences.map((s,i) =>
+    `<div class="sentence" data-idx="${i}"><span class="idx">${i+1}</span>${escHtml(s.text)}</div>`
+  ).join('');
+  sentencesEl.querySelectorAll('.sentence').forEach(el => {
+    el.addEventListener('click', () => playSentence(+el.dataset.idx));
+  });
+}
+
+function escHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+$('backBtn').addEventListener('click', () => {
+  stopAudio();
+  readerArea.classList.remove('active');
+  uploadArea.classList.remove('hidden');
+  playerBar.classList.add('hidden');
+});
+
+// Playback
+async function playSentence(idx) {
+  if(idx<0||idx>=state.sentences.length) return;
+  stopAudio();
+  state.currentIdx = idx;
+  state.playing = true;
+  updateUI();
+
+  const el = sentencesEl.querySelector(`[data-idx="${idx}"]`);
+  if(el) { el.classList.add('loading'); el.scrollIntoView({behavior:'smooth',block:'center'}); }
+
+  try {
+    let blob;
+    if(state.audioCache[idx]) { blob = state.audioCache[idx]; }
+    else {
+      const r = await fetch(`${API}/api/synthesize/${state.docId}/${idx}`);
+      if(!r.ok) throw new Error('Synthesis failed');
+      blob = await r.blob();
+      state.audioCache[idx] = blob;
+    }
+    if(el) el.classList.remove('loading');
+    if(state.currentIdx !== idx) return; // user changed
+
+    const url = URL.createObjectURL(blob);
+    state.audio = new Audio(url);
+    state.audio.play();
+    visualizer.classList.add('playing');
+
+    // Prefetch next
+    if(idx+1 < state.sentences.length && !state.audioCache[idx+1]) {
+      fetch(`${API}/api/synthesize/${state.docId}/${idx+1}`).then(r=>r.blob()).then(b=>{state.audioCache[idx+1]=b;}).catch(()=>{});
+    }
+
+    state.audio.onended = () => {
+      visualizer.classList.remove('playing');
+      if(el) el.classList.add('played');
+      if($('autoPlay').checked && idx+1 < state.sentences.length) {
+        playSentence(idx+1);
+      } else {
+        state.playing = false; updateUI();
+      }
+    };
+  } catch(e) {
+    if(el) el.classList.remove('loading');
+    showToast('合成失败: '+e.message);
+    state.playing = false; updateUI();
+  }
+}
+
+function stopAudio() {
+  if(state.audio) { state.audio.pause(); state.audio=null; }
+  state.playing = false;
+  visualizer.classList.remove('playing');
+}
+
+function updateUI() {
+  // Update sentence highlights
+  sentencesEl.querySelectorAll('.sentence').forEach(el => {
+    el.classList.toggle('active', +el.dataset.idx === state.currentIdx);
+  });
+  // Update play button
+  playBtn.textContent = state.playing ? '⏸' : '▶';
+  // Update progress
+  if(state.currentIdx >= 0) {
+    const s = state.sentences[state.currentIdx];
+    progressText.textContent = s ? s.text.slice(0,60) : '';
+    progressMeta.textContent = `${state.currentIdx+1} / ${state.sentences.length}`;
+  }
+}
+
+// Controls
+playBtn.addEventListener('click', () => {
+  if(state.playing) { stopAudio(); updateUI(); }
+  else { playSentence(state.currentIdx < 0 ? 0 : state.currentIdx); }
+});
+$('prevBtn').addEventListener('click', () => { if(state.currentIdx > 0) playSentence(state.currentIdx-1); });
+$('nextBtn').addEventListener('click', () => { if(state.currentIdx < state.sentences.length-1) playSentence(state.currentIdx+1); });
+
+// Character switching
+document.querySelectorAll('.char-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const c = btn.dataset.char;
+    showLoading(`正在切换角色: ${btn.textContent}...`);
+    try {
+      const r = await fetch(API+'/api/character', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({character:c})});
+      if(!r.ok) throw new Error(await r.text());
+      document.querySelectorAll('.char-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      state.audioCache = {};
+      showToast(`已切换到 ${btn.textContent}`);
+    } catch(e) { showToast('切换失败: '+e.message); } finally { hideLoading(); }
+  });
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if(e.target.tagName==='TEXTAREA') return;
+  if(e.code==='Space') { e.preventDefault(); playBtn.click(); }
+  if(e.code==='ArrowLeft') $('prevBtn').click();
+  if(e.code==='ArrowRight') $('nextBtn').click();
+});
+</script>
+</body>
+</html>

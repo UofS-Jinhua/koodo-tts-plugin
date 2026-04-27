@@ -1,0 +1,20 @@
+{
+  "identifier": "com.local.audiobook.tts",
+  "type": "voice",
+  "displayName": "Local Audiobook TTS",
+  "icon": "speaker",
+  "version": "1.0.0",
+  "config": {},
+  "voiceList": [
+    {
+      "name": "local_kiana",
+      "gender": "female",
+      "locale": "zh-CN",
+      "displayName": "Local GPT-SoVITS (Kiana)",
+      "plugin": "com.local.audiobook.tts",
+      "config": {}
+    }
+  ],
+  "scriptSHA256": "53d18321f3c93b407c3a1f47031a3490d872fe308b7a47cc716224f8dfd47076",
+  "script": "const getAudioPath = async (text, speed, dirPath, config) => {\n  const http = require('http');\n  const fs = require('fs');\n  const path = require('path');\n  const crypto = require('crypto');\n  const child_process = require('child_process');\n\n  const checkServer = () => new Promise((resolve) => {\n    const req = http.get('http://127.0.0.1:8000/api/status', (res) => resolve(res.statusCode === 200));\n    req.on('error', () => resolve(false));\n  });\n\n  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n\n  let isReady = await checkServer();\n  if (!isReady) {\n    console.log(\"TTS Server offline, starting...\");\n    const batPath = 'C:\\\\Tools\\\\Codes\\\\audiobook\\\\start_server.bat';\n    const child = child_process.spawn('cmd.exe', ['/c', batPath], {\n      detached: true,\n      windowsHide: true,\n      stdio: 'ignore',\n      cwd: 'C:\\\\Tools\\\\Codes\\\\audiobook',\n      env: Object.assign({}, process.env, { LAUNCHED_BY_KOODO: '1' })\n    });\n    child.unref();\n    \n    for (let i = 0; i < 30; i++) {\n      await sleep(1000);\n      if (await checkServer()) {\n        isReady = true;\n        break;\n      }\n    }\n  }\n\n  if (!isReady) {\n    throw new Error('TTS Server failed to start after 30 seconds.');\n  }\n\n  return new Promise((resolve, reject) => {\n    const postData = JSON.stringify({ text: text });\n    const options = {\n      hostname: '127.0.0.1',\n      port: 8000,\n      path: '/api/synthesize_text',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Content-Length': Buffer.byteLength(postData)\n      }\n    };\n    const req = http.request(options, (res) => {\n      if (res.statusCode !== 200) {\n        return reject(new Error('TTS Server returned status code ' + res.statusCode));\n      }\n      const fileName = crypto.randomUUID() + '.wav';\n      const filePath = path.join(dirPath, fileName);\n      const fileStream = fs.createWriteStream(filePath);\n      res.pipe(fileStream);\n      \n      fileStream.on('close', () => {\n        resolve(filePath);\n      });\n      \n      fileStream.on('error', (err) => {\n        fs.unlink(filePath, () => {});\n        reject(err);\n      });\n    });\n    req.on('error', (e) => reject(e));\n    req.write(postData);\n    req.end();\n  });\n};\nglobal.getAudioPath = getAudioPath;"
+}
