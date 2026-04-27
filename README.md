@@ -11,10 +11,10 @@
 
 ### 1. 克隆代码仓库
 
-`ash
+```bash
 git clone <你的仓库地址>
 cd audiobook
-`
+```
 
 ### 2. 初始化 Python 虚拟环境
 
@@ -22,7 +22,7 @@ cd audiobook
 
 在项目根目录下打开终端，执行以下命令创建并激活虚拟环境：
 
-`ash
+```bash
 # 创建名叫 .venv-genie 的虚拟环境 (名称需与启动脚本一致)
 python -m venv .venv-genie
 
@@ -31,7 +31,7 @@ python -m venv .venv-genie
 
 # 安装所需的依赖包
 pip install -r requirements.txt
-`
+```
 
 ### 3. 一键下载必要的 AI 模型文件
 
