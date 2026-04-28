@@ -1,15 +1,11 @@
 @echo off
 
-:: If launched by Koodo, bypass the minimized window creation
-if "%LAUNCHED_BY_KOODO%" == "1" goto :skip_minimize
-
 if not "%MINIMIZED%" == "1" (
     set MINIMIZED=1
     start /MIN cmd.exe /c "%~dpnx0"
     exit /b
 )
 
-:skip_minimize
 title Audiobook TTS Server
 echo =========================================
 echo   Starting Local Audiobook TTS Server...

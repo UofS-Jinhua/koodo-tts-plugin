@@ -164,7 +164,8 @@ class TTSEngine:
 
     def get_characters(self) -> dict:
         """Return available characters."""
+        config = load_characters_config()
         return {
             k: {**v, "loaded": k in self._loaded_characters}
-            for k, v in PREDEFINED_CHARACTERS.items()
+            for k, v in config.items()
         }
