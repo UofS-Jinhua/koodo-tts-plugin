@@ -1,7 +1,16 @@
-﻿# Koodo Reader TTS 引擎 (GPT-SoVITS 本地后端)
+﻿# Koodo Reader TTS 引擎 (GPT-SoVITS 本地后端 + 情感分析)
 
 这是一个为 **Koodo Reader** 提供强大的本地有声书（TTS）功能的后端服务项目。
-基于 [Genie-TTS](https://github.com/fluent-tts/genie-tts) 构建，底层使用 **GPT-SoVITS ONNX** 模型进行推理。它可以让你的小说获得接近真人的语音朗读体验，且**全程本地运行、无需断网、保证隐私**。
+基于 [Genie-TTS](https://github.com/fluent-tts/genie-tts) 构建，底层使用 **GPT-SoVITS ONNX** 模型进行推理，并集成 **mDeBERTa-v3** 零样本分类本地 NLP 模型实现动态情感语音切换。它可以让你的小说获得接近真人的语音朗读体验，且**全程本地 CPU 高效运行、无需断网、保证隐私**。
+
+## 🌟 核心特性
+
+- **GPT-SoVITS ONNX 推理**: 本地高性能语音合成，支持动态热加载模型。
+- **上下文感知的情感分析**: 自动结合上下文（前置、后置句子），使用 `mDeBERTa-v3-base-mnli-xnli` 本地大语言模型进行零样本分类（开心、伤心、愤怒、平静），精准把握当前句子的情绪。
+- **无缝情绪语音切换**: 对同一角色支持在不重新加载底层模型的前提下，通过智能替换参考音频（Reference Audio）实现情绪音色的无缝切换。
+- **强大的文本清洗**: 自动过滤零宽字符、排版空格，并优化连续标点和冒号分号导致的 TTS 崩溃/电音问题。
+- **极致的 CPU 优化**: 专为 AMD Z1 Extreme (AVX-512) 等现代 CPU 优化，所有推理（TTS + NLP）全部基于 CPU，响应速度极快且不占显存。
+- **自包含模型缓存**: NLP 模型会自动下载并隔离存储在项目目录的 `NLP_Model/` 中，保持环境纯净。
 
 ---
 
@@ -35,13 +44,16 @@ pip install -r requirements.txt
 
 ### 3. 一键下载必要的 AI 模型文件
 
-因为 TTS 底层依赖声学与语义大模型，默认的 Git 仓库通常不包含这些几百兆的大文件。
-我已经在 `setup` 文件夹中编写了**全自动一键下载脚本**，它会自动连接到 HuggingFace 帮你拉取缺失的核心文件并自动摆放：
+因为 TTS 和 NLP 底层依赖声学与语义大模型，默认的 GitHub 仓库不包含这些大文件。
+**对于 TTS 模型**，运行自动脚本连接 HuggingFace 拉取：
 
 ```bash
 # 确保在激活了虚拟环境的终端中，运行以下命令：
 python setup/download_models.py
 ```
+
+**对于 NLP 情感模型（mDeBERTa-v3）**：
+NLP 分析器会在第一次启动项目服务端时，自动从 HuggingFace 离线缓存至当前项目路径下的 `NLP_Model/` 文件夹内（约为几百兆），全程不影响系统其他环境变量。
 
 ### 4. 角色管理与导入 (支持 GPT-SoVITS 转换)
 
@@ -54,7 +66,7 @@ python setup/download_models.py
   ```
   完成之后，系统立刻就能识别出名叫“菲比”的角色。
 
-> 提示：如果你手动往 `characters.json` 中加入了新配置，或者执行了上边的导入脚本，**无需重启 `start_server.bat` 后端服务**，当你下一次听书切换时，它会自动在内存里热加载新数据！
+> 提示：如果需要支持某角色的**多情绪音色覆盖**，只需在 `characters.json` 中添加带情绪后缀的别名字段，例如 `"feibi_happy"`、`"feibi_angry"`，引用不同的参考音频即可，主模型无需更改。
 
 ---
 
@@ -63,11 +75,9 @@ python setup/download_models.py
 本项目自带了一个 Koodo 测试插件，你可以：
 
 1. 打开 **Koodo Reader**。
-2. 进入 Koodo 设置，找到 **插件系统 / 扩展模式**（或按提示向内侧拖放本地插件）。
-3. 导入本仓库目录下的 koodo_plugin/koodo_tts_plugin.json 文件进行安装。
-4. 在有声书或段落界面，选中小说文本文本点击“听书”。
-
-> 插件只是负责“发请求”的前端。真正朗读文字、进行断句的都是这个 Python 引擎本身。
+2. 进入 Koodo 设置，找到 **插件系统 / 扩展模式**。
+3. 导入本仓库目录下的 `koodo_plugin/koodo_tts_plugin.json` 文件进行安装。
+4. 听书时勾选所需的角色（例如：`feibi`）即可体验带语气感知的语音朗读功能。
 
 ---
 

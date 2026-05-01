@@ -22,5 +22,10 @@ venv.bak/
 *.bin
 *.safetensors
 
+# Transformers cache
+.transformers
+
+.cache
+
 # Logs
 *.log

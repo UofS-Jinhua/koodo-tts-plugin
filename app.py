@@ -40,7 +40,6 @@ app.add_middleware(
 text_processor = TextProcessor()
 tts_engine: Optional[TTSEngine] = None
 _engine_lock = asyncio.Lock()
-_engine_sync_lock = threading.Lock()
 last_active_time = time.time()
 active_streams = {}
 
@@ -162,14 +161,17 @@ def synthesize_sentence(doc_id: str, sentence_id: int):
     if sentence is None:
         raise HTTPException(status_code=404, detail="Sentence not found")
 
+    # Fetch context to help emotion inference
+    prev_sen = text_processor.get_sentence(doc_id, sentence_id - 1) if sentence_id > 0 else ""
+    next_sen = text_processor.get_sentence(doc_id, sentence_id + 1) or ""
+
     engine = get_engine()
     
     global last_active_time
     last_active_time = time.time()
 
     try:
-        with _engine_sync_lock:
-            wav_bytes = engine.synthesize(sentence)
+        wav_bytes = engine.synthesize(sentence, prev_text=prev_sen, next_text=next_sen)
     except Exception as e:
         logger.error(f"TTS synthesis error: {e}")
         raise HTTPException(status_code=500, detail=f"Synthesis failed: {str(e)}")
@@ -198,8 +200,7 @@ def synthesize_text_endpoint(input: TextInput):
     last_active_time = time.time()
 
     try:
-        with _engine_sync_lock:
-            wav_bytes = engine.synthesize(input.text)
+        wav_bytes = engine.synthesize(input.text)
     except Exception as e:
         logger.error(f"TTS synthesis error: {e}")
         raise HTTPException(status_code=500, detail=f"Synthesis failed: {str(e)}")
@@ -249,10 +250,8 @@ def stream_text(stream_id: str):
     
     def audio_generator():
         try:
-            # We must hold the lock while synthesizing the stream
-            with _engine_sync_lock:
-                for chunk in engine.synthesize_stream(text):
-                    yield chunk
+            for chunk in engine.synthesize_stream(text):
+                yield chunk
         except Exception as e:
             logger.error(f"Streaming error: {e}")
             

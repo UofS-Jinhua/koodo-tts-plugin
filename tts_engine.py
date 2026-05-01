@@ -9,9 +9,12 @@ import logging
 import tempfile
 import soundfile as sf
 import numpy as np
+import threading
+import hashlib
 import genie_tts as genie
 from text_processor import TextProcessor
 
+from emotion_analyzer import analyzer
 import json
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,13 @@ class TTSEngine:
         self._current_character = None
         self._sample_rate = 32000  # GPT-SoVITS default
         self._text_processor = TextProcessor()
+        self._lock = threading.Lock()
+        self._emotion_lock = threading.Lock()
+        
+        # Simple LRU Cache to handle Koodo timeout retries
+        self._cache = {}
+        self._cache_keys = []
+        self._cache_max_size = 30
 
         logger.info(f"[TTS] Initializing with character: {character}")
         self.load_character(character)
@@ -110,7 +120,7 @@ class TTSEngine:
     def sample_rate(self) -> int:
         return self._sample_rate
 
-    def synthesize(self, text: str) -> bytes:
+    def synthesize(self, text: str, prev_text: str = "", next_text: str = "") -> bytes:
         """
         Synthesize text to WAV audio bytes.
         Returns: WAV file content as bytes.
@@ -129,22 +139,70 @@ class TTSEngine:
         text = re.sub(r'[…]+', '…', text)          # Multiple Chinese ellipsis to single
         text = re.sub(r'\.{2,}', '…', text)        # Multiple English dots to single ellipsis
         text = re.sub(r'([。！？\.\!\?])\1+', r'\1', text) # Repeated punctuations to single
+        
+        # 很多 TTS 推理在处理结尾为冒号（：）或分号（；）时容易切分异常导致生成空文件失败
+        # 故将其全部替换为逗号，实现同样的语音停顿效果即可
+        text = text.replace('：', '，').replace(':', ',')
+        text = text.replace('；', '，').replace(';', ',')
 
         if not self._current_character:
             raise RuntimeError("No character loaded. Call load_character first.")
+
+        # Check cache first (Hash to save memory in keys)
+        cache_key = hashlib.md5(f"{self._current_character}_{text}_{prev_text}_{next_text}".encode()).hexdigest()
+        with self._lock:
+            if cache_key in self._cache:
+                logger.info(f"[TTS] Cache hit for text: {text[:15]}...")
+                self._cache_keys.remove(cache_key)
+                self._cache_keys.append(cache_key)
+                return self._cache[cache_key]
+
+        # ---- Dynamic Emotion Audio Switch ----
+        # 1. Analyze the emotion of the current sentence with context (Using separate lock to prevent CPU thrashing)
+        with self._emotion_lock:
+            emotion = analyzer.analyze(text, prev_text, next_text)
+        
+        # 2. Compose the target character key based on the detected emotion
+        # For example, if current_character is "kiana" and emotion is "happy", the key is "kiana_happy".
+        # If emotion is "neutral", fallback to "kiana"
+        target_char_key = self._current_character if emotion == "neutral" else f"{self._current_character}_{emotion}"
+        
+        global CHARACTERS_CONFIG
+        # 3. Get configuration for target emotion (fallback to base character if not found)
+        config = CHARACTERS_CONFIG.get(target_char_key, CHARACTERS_CONFIG.get(self._current_character))
+        
+        # 4. If the fallback config has custom reference audio, dynamically apply it
+        if config and config.get("type", "predefined") == "custom":
+            ref_audio = config.get("ref_audio")
+            ref_text = config.get("ref_text")
+            lang = config.get("lang", "Chinese")
+            
+            if ref_audio and not os.path.isabs(ref_audio):
+                ref_audio = os.path.join(BASE_DIR, ref_audio)
+                
+            if ref_audio and ref_text:
+                # We replace the characteristics without reloading the ONNX models!
+                with self._lock:
+                    genie.set_reference_audio(
+                        character_name=self._current_character,
+                        audio_path=ref_audio,
+                        audio_text=ref_text,
+                        language=lang,
+                    )
 
         # Use a temp file since Genie-TTS writes to file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
-            genie.tts(
-                character_name=self._current_character,
-                text=text,
-                play=False,
-                split_sentence=True,
-                save_path=tmp_path,
-            )
+            with self._lock:
+                genie.tts(
+                    character_name=self._current_character,
+                    text=text,
+                    play=False,
+                    split_sentence=True,
+                    save_path=tmp_path,
+                )
 
             # Read back and return as bytes
             with open(tmp_path, "rb") as f:
@@ -153,6 +211,16 @@ class TTSEngine:
             # Get actual sample rate from the WAV file
             data, sr = sf.read(tmp_path)
             self._sample_rate = sr
+            
+            # Save to cache
+            with self._lock:
+                if cache_key in self._cache:
+                    self._cache_keys.remove(cache_key)
+                self._cache[cache_key] = wav_bytes
+                self._cache_keys.append(cache_key)
+                if len(self._cache_keys) > self._cache_max_size:
+                    oldest = self._cache_keys.pop(0)
+                    del self._cache[oldest]
 
             return wav_bytes
 

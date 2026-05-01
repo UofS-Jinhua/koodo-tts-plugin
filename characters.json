@@ -1,29 +1,53 @@
 {
   "kiana": {
-    "name": "琪亚娜 (Kiana)",
+    "name": "琪亚娜 (Kiana) - Neutral",
     "desc": "崩坏3 - 琪亚娜",
     "lang": "Chinese",
     "model_dir": "CharacterModels/v2ProPlus/kiana/tts_models",
-    "ref_audio": "CharacterModels/v2ProPlus/kiana/这个名号，可能听上去有些吓人，但我和大家一样，都只是人类的普通一员。.wav",
+    "ref_audio": "CharacterModels/v2ProPlus/kiana/kiana_neutral.wav",
     "ref_text": "这个名号，可能听上去有些吓人，但我和大家一样，都只是人类的普通一员。",
+    "type": "custom"
+  },
+  "kiana_sad": {
+    "name": "琪亚娜 (Kiana) - Sad",
+    "desc": "崩坏3 - 琪亚娜 - sad",
+    "lang": "Chinese",
+    "model_dir": "CharacterModels/v2ProPlus/kiana/tts_models",
+    "ref_audio": "CharacterModels/v2ProPlus/kiana/kiana_sad.wav",
+    "ref_text": "卡斯兰娜家的人，无论付出什么代价，都一定要守护住自己最爱的人吗？",
+    "type": "custom"
+  },
+  "kiana_happy": {
+    "name": "琪亚娜 (Kiana) - Happy",
+    "desc": "崩坏3 - 琪亚娜 - happy",
+    "lang": "Chinese",
+    "model_dir": "CharacterModels/v2ProPlus/kiana/tts_models",
+    "ref_audio": "CharacterModels/v2ProPlus/kiana/kiana_happy.wav",
+    "ref_text": "年糕已经躲进我的礼物盒了，一旦芽衣打开，它就会立刻进入最好玩的生日之梦",
+    "type": "custom"
+  },
+  "kiana_angry": {
+    "name": "琪亚娜 (Kiana) - Angry",
+    "desc": "崩坏3 - 琪亚娜 - angry",
+    "lang": "Chinese",
+    "model_dir": "CharacterModels/v2ProPlus/kiana/tts_models",
+    "ref_audio": "CharacterModels/v2ProPlus/kiana/kiana_angry.wav",
+    "ref_text": "这个鸡窝头，居然说我做的菜不能吃！",
+    "type": "custom"
+  },
+  "kiana_serious": {
+    "name": "琪亚娜 (Kiana) - Serious",
+    "desc": "崩坏3 - 琪亚娜 - serious",
+    "lang": "Chinese",
+    "model_dir": "CharacterModels/v2ProPlus/kiana/tts_models",
+    "ref_audio": "CharacterModels/v2ProPlus/kiana/kiana_serious.wav",
+    "ref_text": "这份权能是所有人不懈斗争的成果，我会妥善保管的。",
     "type": "custom"
   },
   "feibi": {
     "name": "菲比 (Feibi)",
     "desc": "鸣潮 - 菲比",
     "lang": "Chinese",
-    "type": "predefined"
-  },
-  "mika": {
-    "name": "ミカ (Mika)",
-    "desc": "碧蓝档案 - 圣园未花",
-    "lang": "Japanese",
-    "type": "predefined"
-  },
-  "37": {
-    "name": "37",
-    "desc": "重返未来 - 37",
-    "lang": "English",
     "type": "predefined"
   }
 }
