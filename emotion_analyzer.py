@@ -56,8 +56,8 @@ class EmotionAnalyzer:
             
             # 对于四分类，0.25 是瞎蒙概率。
             # 文本中如果有“生锈”、“废弃”、“断裂”，NLP 很容易给出 0.4 左右的“伤心”得分。
-            # 为了确保语气不过度切换（只在明显的情绪爆发时才换语气），把阈值提高到 0.65
-            if best_score < 0.8:
+            # 为了确保语气不过度切换（只在明显的情绪爆发时才换语气），把阈值提高到 0.9
+            if best_score < 0.9:
                 return "neutral"
                 
             return self.label_mapping.get(best_label, "neutral")
