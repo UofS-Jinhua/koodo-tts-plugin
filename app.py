@@ -161,7 +161,7 @@ def synthesize_sentence(doc_id: str, sentence_id: int):
     if sentence is None:
         raise HTTPException(status_code=404, detail="Sentence not found")
 
-    # Fetch context to help emotion inference
+    # Fetch context (kept for caching footprint consistency)
     prev_sen = text_processor.get_sentence(doc_id, sentence_id - 1) if sentence_id > 0 else ""
     next_sen = text_processor.get_sentence(doc_id, sentence_id + 1) or ""
 

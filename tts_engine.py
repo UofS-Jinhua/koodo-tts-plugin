@@ -14,7 +14,6 @@ import hashlib
 import genie_tts as genie
 from text_processor import TextProcessor
 
-from emotion_analyzer import analyzer
 import json
 
 logger = logging.getLogger(__name__)
@@ -43,7 +42,6 @@ class TTSEngine:
         self._sample_rate = 32000  # GPT-SoVITS default
         self._text_processor = TextProcessor()
         self._lock = threading.Lock()
-        self._emotion_lock = threading.Lock()
         
         # Simple LRU Cache to handle Koodo timeout retries
         self._cache = {}
@@ -156,39 +154,6 @@ class TTSEngine:
                 self._cache_keys.remove(cache_key)
                 self._cache_keys.append(cache_key)
                 return self._cache[cache_key]
-
-        # ---- Dynamic Emotion Audio Switch ----
-        # 1. Analyze the emotion of the current sentence with context (Using separate lock to prevent CPU thrashing)
-        with self._emotion_lock:
-            emotion = analyzer.analyze(text, prev_text, next_text)
-        
-        # 2. Compose the target character key based on the detected emotion
-        # For example, if current_character is "kiana" and emotion is "happy", the key is "kiana_happy".
-        # If emotion is "neutral", fallback to "kiana"
-        target_char_key = self._current_character if emotion == "neutral" else f"{self._current_character}_{emotion}"
-        
-        global CHARACTERS_CONFIG
-        # 3. Get configuration for target emotion (fallback to base character if not found)
-        config = CHARACTERS_CONFIG.get(target_char_key, CHARACTERS_CONFIG.get(self._current_character))
-        
-        # 4. If the fallback config has custom reference audio, dynamically apply it
-        if config and config.get("type", "predefined") == "custom":
-            ref_audio = config.get("ref_audio")
-            ref_text = config.get("ref_text")
-            lang = config.get("lang", "Chinese")
-            
-            if ref_audio and not os.path.isabs(ref_audio):
-                ref_audio = os.path.join(BASE_DIR, ref_audio)
-                
-            if ref_audio and ref_text:
-                # We replace the characteristics without reloading the ONNX models!
-                with self._lock:
-                    genie.set_reference_audio(
-                        character_name=self._current_character,
-                        audio_path=ref_audio,
-                        audio_text=ref_text,
-                        language=lang,
-                    )
 
         # Use a temp file since Genie-TTS writes to file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
