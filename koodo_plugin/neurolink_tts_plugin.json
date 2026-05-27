@@ -1,0 +1,28 @@
+{
+  "identifier": "neurolink-tts-plugin",
+  "type": "voice",
+  "displayName": "GPT SoVits TTS (Kiana)",
+  "icon": "speaker",
+  "version": "1.0.0",
+  "config": {},
+  "voiceList": [
+    {
+      "name": "gpt_sovits_local",
+      "gender": "female",
+      "locale": "zh-CN",
+      "displayName": "Kiana SoVits Local Voice",
+      "plugin": "neurolink-tts-plugin",
+      "config": {
+        "url": "http://127.0.0.1:8002/koodo_tts",
+        "refer_wav_path": "",
+        "prompt_text": "",
+        "prompt_language": "zh",
+        "text_language": "zh",
+        "cut_punc": "，。",
+        "voiceFormat": "wav"
+      }
+    }
+  ],
+  "scriptSHA256": "3289a7b7f4ae72a6e6d90f8ed5af820f0d09fcc4850e2918c096e3919671d251",
+  "script": "const cp = require('child_process');\nconst path = require('path');\nif (!global.neurolinkServer) {\n    const batPath = path.join('C:', 'Codes', 'audiobook', 'start_neurolink_server.bat');\n    // 使用 cmd.exe /c start \"\" \"batPath\" 强制弹出一个独立的可见 CMD 窗口\n    global.neurolinkServer = cp.spawn('cmd.exe', ['/c', 'start', '\"\"', batPath], {\n        env: Object.assign({}, process.env, { LAUNCHED_BY_KOODO: '1' }),\n        windowsHide: false,\n        detached: true\n    });\n    // 当 Koodo 关闭时，根据窗口标题杀掉该窗口以及其下的所有子进程 (python server)\n    process.on('exit', () => {\n        try { cp.execSync('taskkill /FI \"WINDOWTITLE eq Neurolink TTS Server*\" /T /F'); } catch(e){}\n    });\n}\n\nconst getAudioPath = async(t, e, a, o) => {\n    let i = require(\"path\");\n    let n = require(\"fs\");\n    let r = new Date().getTime() + \".\" + o.voiceFormat;\n    let ttsDir = i.join(a, \"tts\");\n    let filePath = i.join(ttsDir, r);\n    \n    if (!n.existsSync(ttsDir)) {\n        n.mkdirSync(ttsDir);\n    }\n    \n    let audioData = await getTTSAudio(t, e, o);\n    if (!audioData) return \"\";\n    \n    n.writeFileSync(filePath, audioData);\n    return filePath;\n};\n\nconst getTTSAudio = async(t, e, a) => {\n    let o = a.url || \"http://127.0.0.1:8000/koodo_tts\",\n        i = a.text_language || \"zh\",\n        n = a.prompt_language || \"zh\",\n        r_path = a.refer_wav_path || \"\",\n        g = a.prompt_text || \"zh\",\n        s = a.cut_punc || \"，。\",\n        u = require(\"axios\");\n        \n    let maxRetries = 30; // 最多尝试30次\n    let delayMs = 2000;  // 每次等待2秒\n\n    while (maxRetries > 0) {\n        try {\n            let res = await u.post(o, { refer_wav_path: r_path, prompt_text: g, prompt_language: n, text: t, text_language: i, cut_punc: s }, { responseType: \"arraybuffer\" });\n            return res.data;\n        } catch (err) {\n            console.log(\"TTS Server not ready, retrying... tries left: \" + maxRetries);\n            maxRetries--;\n            if (maxRetries === 0) {\n                console.log(\"Failed to connect to TTS server after maximum retries.\");\n                return \"\";\n            }\n            await new Promise(resolve => setTimeout(resolve, delayMs));\n        }\n    }\n};\nglobal.getAudioPath = getAudioPath;"
+}
