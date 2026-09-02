@@ -3,18 +3,17 @@ FastAPI backend for the local audiobook reading app.
 Provides endpoints for text upload, TTS synthesis, and audio streaming.
 """
 import os
-import io
-import json
 import logging
 import asyncio
 import threading
 import time
 import subprocess
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
-from fastapi.responses import Response, JSONResponse, FileResponse, StreamingResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import Response, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -27,65 +26,100 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
+# Global state
+text_processor = TextProcessor()
+tts_engine: Optional[TTSEngine] = None
+# 必须是 threading.Lock：下面的合成端点是同步的 def，FastAPI 会把它们丢进线程池
+# 并发执行，asyncio.Lock 在那里根本用不上。
+_engine_lock = threading.Lock()
+last_active_time = time.time()
+
+WATCHDOG_INTERVAL = 30      # 秒
+IDLE_TIMEOUT = 900          # 15 分钟
+KOODO_MISS_THRESHOLD = 3    # 连续几次查不到 Koodo 才退出，避免 tasklist 偶发失败误杀
+
+# Windows 下从无窗口进程调 tasklist 会闪黑框，用这个标志抑制
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+def touch():
+    """记录一次活动，用于 idle 计时。"""
+    global last_active_time
+    last_active_time = time.time()
+
+
+def get_engine() -> TTSEngine:
+    """Lazy-initialize the TTS engine on first use."""
+    global tts_engine
+    # 双重检查：Koodo 会一边播当前句一边预取下一句，两个线程可能同时走到这里。
+    # 没有锁的话 ONNX 模型会被加载两份，内存翻倍甚至直接 OOM。
+    if tts_engine is None:
+        with _engine_lock:
+            if tts_engine is None:
+                logger.info("[App] Initializing TTS engine (first request)...")
+                tts_engine = TTSEngine(character="kiana")
+                logger.info("[App] TTS engine ready.")
+    return tts_engine
+
+
+def _koodo_is_running() -> Optional[bool]:
+    """Koodo 是否还活着。查询失败返回 None（表示无法判断）。"""
+    try:
+        # 只查 Koodo 自己，不再每次拉取全量进程列表——CPU 推理本来就吃满核心，
+        # 原来那种每 10 秒一次的全量 tasklist 会直接和 TTS 抢 CPU。
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq Koodo*", "/NH"],
+            capture_output=True, text=True, errors="ignore",
+            creationflags=CREATE_NO_WINDOW,
+        )
+        return "koodo" in result.stdout.lower()
+    except Exception as e:
+        logger.error(f"Error checking processes: {e}")
+        return None
+
+
+async def idle_watchdog():
+    """Watchdog task to monitor idle time and shut down the server."""
+    # Wait a bit on startup to avoid premature shutdown
+    await asyncio.sleep(20)
+
+    koodo_misses = 0
+    while True:
+        await asyncio.sleep(WATCHDOG_INTERVAL)
+
+        # 1. Check if launched by Koodo and Koodo is closed
+        if os.environ.get("LAUNCHED_BY_KOODO") == "1":
+            running = _koodo_is_running()
+            if running is False:
+                koodo_misses += 1
+                if koodo_misses >= KOODO_MISS_THRESHOLD:
+                    logger.info("[App] Koodo Reader process is closed. Shutting down TTS server.")
+                    os._exit(0)
+            elif running is True:
+                koodo_misses = 0
+
+        # 2. Check idle timeout
+        if time.time() - last_active_time > IDLE_TIMEOUT:
+            logger.info("[App] Server idle for 15 minutes. Shutting down to free memory.")
+            os._exit(0)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start the idle watchdog on server startup."""
+    watchdog = asyncio.create_task(idle_watchdog())
+    yield
+    watchdog.cancel()
+
+
 # Initialize app
-app = FastAPI(title="AudioBook TTS", version="1.0.0")
+app = FastAPI(title="AudioBook TTS", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Global state
-text_processor = TextProcessor()
-tts_engine: Optional[TTSEngine] = None
-_engine_lock = asyncio.Lock()
-last_active_time = time.time()
-active_streams = {}
-
-
-
-def get_engine() -> TTSEngine:
-    """Lazy-initialize the TTS engine on first use."""
-    global tts_engine
-    if tts_engine is None:
-        logger.info("[App] Initializing TTS engine (first request)...")
-        tts_engine = TTSEngine(character="kiana")
-        logger.info("[App] TTS engine ready.")
-    return tts_engine
-
-
-async def idle_watchdog():
-    """Watchdog task to monitor idle time and shut down the server."""
-    global last_active_time
-    
-    # Wait a bit on startup to avoid premature shutdown
-    await asyncio.sleep(20)
-    
-    while True:
-        await asyncio.sleep(10)
-        
-        # 1. Check if launched by Koodo and Koodo is closed
-        if os.environ.get("LAUNCHED_BY_KOODO") == "1":
-            try:
-                # Fast check using tasklist
-                output = subprocess.check_output('tasklist', shell=True).decode('utf-8', errors='ignore').lower()
-                if 'koodo' not in output:
-                    logger.info("[App] Koodo Reader process is closed. Shutting down TTS server.")
-                    os._exit(0)
-            except Exception as e:
-                logger.error(f"Error checking processes: {e}")
-        
-        # 2. Check 15min idle timeout
-        if time.time() - last_active_time > 900:
-            logger.info("[App] Server idle for 15 minutes. Shutting down to free memory.")
-            os._exit(0)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Start the idle watchdog on server startup."""
-    asyncio.create_task(idle_watchdog())
 
 
 # ── Request/Response Models ──────────────────────────────────────
@@ -104,6 +138,7 @@ class CharacterInput(BaseModel):
 async def get_status():
     """Check server and engine status."""
     engine = get_engine()
+    touch()
     return {
         "status": "ready",
         "character": engine.current_character,
@@ -166,9 +201,7 @@ def synthesize_sentence(doc_id: str, sentence_id: int):
     next_sen = text_processor.get_sentence(doc_id, sentence_id + 1) or ""
 
     engine = get_engine()
-    
-    global last_active_time
-    last_active_time = time.time()
+    touch()
 
     try:
         wav_bytes = engine.synthesize(sentence, prev_text=prev_sen, next_text=next_sen)
@@ -195,9 +228,7 @@ def synthesize_text_endpoint(input: TextInput):
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
     engine = get_engine()
-    
-    global last_active_time
-    last_active_time = time.time()
+    touch()
 
     try:
         wav_bytes = engine.synthesize(input.text)
@@ -217,57 +248,19 @@ def synthesize_text_endpoint(input: TextInput):
     )
 
 
-@app.post("/api/prepare_stream")
-async def prepare_stream(input: TextInput):
-    """Store text and return a stream_id."""
-    import uuid
-    stream_id = str(uuid.uuid4())
-    active_streams[stream_id] = input.text
-    
-    # Automatically clean up if not accessed within 60 seconds
-    async def cleanup():
-        await asyncio.sleep(60)
-        if stream_id in active_streams:
-            del active_streams[stream_id]
-            logger.info(f"Cleaned up unaccessed stream {stream_id}")
-            
-    asyncio.create_task(cleanup())
-    
-    return {"stream_id": stream_id}
+# 注：这里原本有一对 /api/prepare_stream + /api/stream 端点，但它们调用的
+# engine.synthesize_stream() 根本不存在（genie-tts 只导出 tts / tts_async），
+# 异常又被吞掉只写日志，客户端拿到的是 HTTP 200 + 空 body，看起来"成功"却没声音。
+# 没有任何调用方（index.html 和两个 Koodo 插件都不用），故删除。
+# 若日后要做真流式，入口是 genie.tts_async()，它返回裸 PCM 的 AsyncIterator[bytes]，
+# 需要自己补 WAV 头。
 
-
-@app.get("/api/stream/{stream_id}")
-def stream_text(stream_id: str):
-    """Stream audio chunks continuously."""
-    if stream_id not in active_streams:
-        raise HTTPException(status_code=404, detail="Stream not found or expired")
-        
-    text = active_streams.pop(stream_id)
-    engine = get_engine()
-    
-    global last_active_time
-    last_active_time = time.time()
-    
-    def audio_generator():
-        try:
-            for chunk in engine.synthesize_stream(text):
-                yield chunk
-        except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            
-    return StreamingResponse(
-        audio_generator(), 
-        media_type="audio/wav",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive"
-        }
-    )
 
 @app.post("/api/character")
 async def change_character(input: CharacterInput):
     """Change the active TTS character."""
     engine = get_engine()
+    touch()
     try:
         engine.load_character(input.character)
         return {"status": "ok", "character": engine.current_character}

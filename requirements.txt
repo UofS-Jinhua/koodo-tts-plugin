@@ -6,5 +6,17 @@ soundfile==0.13.1
 numpy==2.4.4
 genie-tts==2.0.2
 onnxruntime==1.22.1
-uvicorn
 
+# genie-tts 的中文 G2P 依赖 jieba_fast (见 genie_tts/G2P/Chinese/ChineseG2P.py)。
+# 它需要 C++ 编译环境；装不上时用 setup/setup_venv.bat，它会退回 jieba + shim。
+jieba_fast==0.53
+
+# 英文 G2P（中英混读，见 mixed_g2p.py）要用 nltk 的分词和词性标注。
+# 它本来就是 genie-tts 的传递依赖，这里显式写一遍，免得有人用 --no-deps 装
+# genie-tts 之后中英混读静默失效（日志里只会有一条 "英文 G2P 不可用"）。
+nltk
+
+# setup/download_models.py 用它从 HuggingFace 拉模型。
+# 必须是 1.x：download_models.py 里去掉 local_dir_use_symlinks 就是为了配合 1.0
+# 移除该参数的改动，0.x 与实际验证过的环境（本机 1.14.0）行为不一致。
+huggingface_hub>=1.0,<2.0

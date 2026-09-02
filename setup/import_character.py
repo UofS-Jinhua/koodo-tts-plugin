@@ -75,7 +75,7 @@ def convert_and_register_character(
         json.dump(config, f, indent=2, ensure_ascii=False)
         
     print(f"   [注册成功] JSON 文件已更新。")
-    print(f"\n🎉 全新模型已就绪！")
+    print(f"\n[完成] 全新模型已就绪！")
     print(f"   现在后端系统和 Koodo 插件会自动识别【{display_name}】。")
     print(f"   (如果服务器正在运行，不用重启后端，下次切换角色时它会自动拉取最新数据库)")
 
@@ -83,14 +83,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="转换 GPT-SoVITS Torch 权重为本地 ONNX 服务格式，并自动注册到系统。")
     parser.add_argument("--id", required=True, help="英文短标识，如 (ayaka)")
     parser.add_argument("--name", required=True, help="显示名称，如 (神里绫华)")
-    parser.add_argument("--ckpt", required=True, help=".ckpt 格式的 SoVITS 权重路径")
-    parser.add_argument("--pth", required=True, help=".pth 格式的 GPT 权重路径")
+    # 注意别搞反：GPT-SoVITS 训练产出里 .ckpt 是 GPT(s1) 权重、.pth 是 SoVITS(s2) 权重
+    parser.add_argument("--ckpt", required=True, help=".ckpt 格式的 GPT (s1) 权重路径")
+    parser.add_argument("--pth", required=True, help=".pth 格式的 SoVITS (s2) 权重路径")
     parser.add_argument("--audio", required=True, help="角色参考音频 (.wav) 路径")
     parser.add_argument("--text", required=True, help="参考音频对应的文字内容")
     parser.add_argument("--lang", default="Chinese", help="语言 (Chinese/Japanese/English), 默认: Chinese")
-    
+    parser.add_argument("--desc", default="", help="角色描述, 可选")
+
     args = parser.parse_args()
-    
+
+    # 提前校验，避免跑完一半才发现路径打错
+    for label, path in [("--ckpt", args.ckpt), ("--pth", args.pth), ("--audio", args.audio)]:
+        if not os.path.isfile(path):
+            parser.error(f"{label} 指向的文件不存在: {path}")
+
     convert_and_register_character(
         short_name=args.id,
         display_name=args.name,
@@ -98,5 +105,6 @@ if __name__ == "__main__":
         pth_path=args.pth,
         ref_audio=args.audio,
         ref_text=args.text,
-        language=args.lang
+        language=args.lang,
+        desc=args.desc
     )
