@@ -23,6 +23,7 @@ GPT-SoVITS v2 的符号表 (SymbolsV2.py) 里拼音、罗马音、ARPAbet 是同
 不改 site-packages 里的源码，重建虚拟环境后依然生效。
 """
 import logging
+import functools
 import re
 from typing import Callable, List, Optional, Tuple
 
@@ -31,6 +32,7 @@ import numpy as np
 import genie_tts.Audio.ReferenceAudio as _reference_audio_module
 import genie_tts.Core.Inference as _inference_module
 import genie_tts.GetPhonesAndBert as _gpb_module
+from genie_tts.G2P.Chinese.ToneSandhi import ToneSandhi as _ToneSandhi
 from genie_tts.ModelManager import model_manager
 from genie_tts.Utils.Constants import BERT_FEATURE_DIM
 from genie_tts.Utils.Language import normalize_language
@@ -173,6 +175,52 @@ def get_phones_and_bert(prompt_text: str, language: str = 'japanese') -> Tuple[n
 get_phones_and_bert._genie_mixed_g2p = True  # type: ignore[attr-defined]
 
 
+# --- ToneSandhi 空韵母崩溃补丁 -------------------------------------------------
+# 「嗯」这类自成音节的鼻音在 pypinyin 里没有韵母：
+#   lazy_pinyin('嗯', style=Style.FINALS_TONE3) -> ['']
+# 而 ToneSandhi 的三声变调逻辑直接对韵母取 [-1]（例如
+# `sub_finals_list[i - 1][-1][-1] == "3"`），于是「嗯，」这种再普通不过的文本
+# 就会抛 IndexError: string index out of range。单个「嗯」不崩，是因为 i-1 >= 0
+# 不成立躲过了判断，后面只要再跟一个字或标点就必崩。
+#
+# 这是 genie 内嵌的 PaddleSpeech 代码的上游 bug（GPT-SoVITS 各分支都带着）。
+# 常用汉字里韵母为空的一共 13 个：兙兡呣嗧嗯噷桛烪瓧瓰瓱瓼甅，
+# 对话密集的小说里「嗯」几乎必现。
+#
+# 更糟的是 genie 的 worker 会把这个异常 catch 住只记日志然后跳到下一句
+# (Core/TTSPlayer.py)，所以表现是整段合成静默失败、Koodo 那边收到 500。
+#
+# 三声变调只是让连读更自然的润色，拿不到就跳过：音素本身仍然正确，
+# 顶多「嗯，你好」的连读稍微生硬一点，总比整段念不出来强。
+_TONE_SANDHI_METHODS = (
+    "_three_sandhi",                    # (word, finals) -> finals
+    "_merge_continuous_three_tones",    # (seg,) -> seg
+    "_merge_continuous_three_tones_2",  # (seg,) -> seg
+)
+_ORIGINAL_TONE_SANDHI = {name: getattr(_ToneSandhi, name) for name in _TONE_SANDHI_METHODS}
+
+
+_EMPTY_FINALS_SEEN = set()
+
+
+def _guard_empty_finals(name: str, func: Callable) -> Callable:
+    @functools.wraps(func)
+    def wrapper(self, *args):
+        try:
+            return func(self, *args)
+        except IndexError:
+            # 上面三个方法的最后一个参数正好都是要返回的那个东西
+            # （finals 或 seg），原样交回去就等于「这一处不做变调」。
+            if name not in _EMPTY_FINALS_SEEN:
+                # 只提示一次：对话密集的书里「嗯」遍地都是，每句都记会刷屏。
+                _EMPTY_FINALS_SEEN.add(name)
+                logger.info("[mixed-g2p] ToneSandhi.%s 遇到空韵母（嗯/呣/噷 这类字），"
+                            "已跳过该处变调；后续同类不再提示。", name)
+            return args[-1]
+    wrapper._genie_empty_finals_guard = True
+    return wrapper
+
+
 def is_applied() -> bool:
     return getattr(_gpb_module.get_phones_and_bert, "_genie_mixed_g2p", False)
 
@@ -183,6 +231,8 @@ def apply() -> bool:
         return False
     for module in _PATCH_TARGETS:
         module.get_phones_and_bert = get_phones_and_bert
+    for name, func in _ORIGINAL_TONE_SANDHI.items():
+        setattr(_ToneSandhi, name, _guard_empty_finals(name, func))
     logger.info("[mixed-g2p] 已启用中英混读。")
     return True
 
@@ -191,3 +241,5 @@ def revert() -> None:
     """还原成 genie 原本的行为（英文会被丢掉），主要给排查问题用。"""
     for module in _PATCH_TARGETS:
         module.get_phones_and_bert = _ORIGINAL_GET_PHONES_AND_BERT
+    for name, func in _ORIGINAL_TONE_SANDHI.items():
+        setattr(_ToneSandhi, name, func)

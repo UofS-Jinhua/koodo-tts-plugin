@@ -39,9 +39,26 @@ CHARACTERS_CONFIG = load_characters_config()
 
 # 片段之间插入的短停顿，避免拼接处听起来生硬
 INTER_SEGMENT_PAUSE_SEC = 0.12
+# 判定"解码器早停"的时长下限，单位：秒/字。详见 _min_plausible_sec。
+# 实测正常合成的下限是 0.164 秒/字（8 个代表性片段 × 3 次，split 两种模式都测过），
+# 这里取它的一半，既能抓住塌陷又不会误判正常的快句子。
+MIN_SEC_PER_CHAR = 0.082
 # 至少要有一个能发音的字符，否则送进 TTS 只会得到 0 字节文件
 # (\w 在 Python 3 的 str 模式下已经涵盖汉字、假名等 Unicode 字母)
 SPEAKABLE = re.compile(r'\w')
+
+# genie 的 TextSplitter 只认 “”‘’"' 这几种成对符号 (见 genie_tts/Utils/
+# TextSplitter.py 的 all_puncts_chars)，中文直角引号和各类括号一概不认。后果是
+# 它会把 「你走吧。」 切成 「你走吧。 和 」 两句，而 get_effective_len 又把落单的
+# 」 当成宽度 2 的"内容"字符，于是这个纯标点片段被当作正经句子送去合成：G2P 把
+# 它规范化成空，解码器没有任何文本可依据，就会凭空生成 7 秒左右的气声。
+# 实测 」 单独合成 = 7.28 秒垃圾音频；「你走吧。」 整句时长在 0.8s 和 8.1s 之间
+# 双峰跳变。而且 genie 的 worker 循环 catch 住单句异常后只记日志就跳到下一句
+# (Core/TTSPlayer.py)，丢掉的那句不会让整体失败——表现就是"有时候吞字"。
+# 同一类问题在 （…） 上也复现过（尾部落单的 ）），所以括号family 一并处理。
+# 这些符号本身都不发音，引号携带的旁白/台词信息又已经在 TextProcessor 切分时
+# 用掉了，送进 TTS 之前一律去掉。
+UNSPOKEN_MARKS = str.maketrans("", "", "「」『』（）()【】〔〕〖〗《》〈〉[]{}")
 
 class TTSEngine:
     """Wraps Genie-TTS for GPT-SoVITS inference."""
@@ -146,6 +163,16 @@ class TTSEngine:
         # 故将其全部替换为逗号，实现同样的语音停顿效果即可
         text = text.replace('：', '，').replace(':', ',')
         text = text.replace('；', '，').replace(';', ',')
+
+        # 破折号必须自己降级成逗号，genie 那边指望不上。
+        # ChineseG2P 的 pattern_filter 只保留 ! ? … , . -，其余非汉字字符整段删掉
+        # (见 G2P/Chinese/ChineseG2P.py 的 PUNCTUATION / pattern_filter)。它的
+        # PUNCTUATION_REPLACEMENTS 里虽然写了 "—": "-"，但破折号在映射之前就被
+        # TextNormalizer 吃掉了，那条规则是死代码——实测
+        #   "你说这个啊——普通血族" -> text_clean "你说这个啊普通血族"
+        # 破折号连同它该有的停顿一起消失，两个分句直接黏在一起念。
+        # 这里降级成逗号，把停顿还回来。
+        text = re.sub(r'[—－–]{1,}|_{2,}', '，', text)
         return text.strip()
 
     def synthesize(self, text: str, prev_text: str = "", next_text: str = "") -> bytes:
@@ -185,19 +212,23 @@ class TTSEngine:
         if not segments:
             return self._silent_wav()
 
-        # genie 的 tts_player 是模块级单例，context.current_speaker 和内部队列都共享，
-        # 所以整段合成期间必须一直持锁，否则两个并发请求的片段会互相串音。
-        with self._lock:
-            frames = bytearray()
-            pause = b"\x00" * (int(self._sample_rate * INTER_SEGMENT_PAUSE_SEC) * 2)
-            for segment in segments:
-                segment_frames = self._synthesize_segment(segment)
-                if not segment_frames:
-                    logger.warning(f"[TTS] Segment produced no audio, skipped: {segment[:20]}...")
-                    continue
-                if frames:
-                    frames += pause
-                frames += segment_frames
+        # 注意：这里不对整个 segments 列表持锁——每个 genie.tts() 调用自己在
+        # _synthesize_segment 内部加锁（见那里的说明）。Koodo 会并发预取好几句，
+        # 如果在这里把整段循环锁住，一句长段落（尤其是现在引号切分之后，一段
+        # 可能拆成十几个片段）就会独占锁几十秒，把其他本该几乎秒回的短句请求
+        # 全部堵住——实测发生过：一次请求连续合成 13 个片段耗时 61 秒，同一时间
+        # 排队的 8 个请求全部卡到那 61 秒结束才一起返回。Koodo 等不到它正要播的
+        # 那一句，播放就断在那里，而服务端这边看到的只是"全部最终都 200 了"。
+        frames = bytearray()
+        pause = b"\x00" * (int(self._sample_rate * INTER_SEGMENT_PAUSE_SEC) * 2)
+        for segment in segments:
+            segment_frames = self._synthesize_segment(segment)
+            if not segment_frames:
+                logger.warning(f"[TTS] Segment produced no audio, skipped: {segment[:20]}...")
+                continue
+            if frames:
+                frames += pause
+            frames += segment_frames
 
         if not frames:
             logger.error(f"[TTS] All {len(segments)} segment(s) failed for: {text[:30]}...")
@@ -217,8 +248,25 @@ class TTSEngine:
 
         return wav_bytes
 
-    def _synthesize_segment(self, segment: str, retries: int = 1) -> bytes:
-        """合成单个片段，返回裸 PCM 帧。失败会重试一次。调用方需持有 self._lock。"""
+    def _min_plausible_sec(self, segment: str) -> float:
+        """这段文本至少该念多久。低于这个时长就说明解码器早停、内容被吞了。
+
+        实测正常朗读速度约 0.20~0.37 秒/字（短片段因为有起音和收尾偏慢），
+        这里按 0.06 判，留了 3 倍以上余量：正常合成不会误判，而早停的产物
+        （23 个字只出 0.20 秒 ≈ 0.009 秒/字）会被稳稳抓住。
+        """
+        return TextProcessor.width(segment) / 2 * MIN_SEC_PER_CHAR
+
+    def _synthesize_segment(self, segment: str, retries: int = 2) -> bytes:
+        """合成单个片段，返回裸 PCM 帧。失败会重试。"""
+        # 见 UNSPOKEN_MARKS 的说明。必须在这里去掉而不是在 clean_text 里：
+        # clean_text 跑在切分之前，TextProcessor 还要靠引号区分旁白和台词。
+        segment = segment.translate(UNSPOKEN_MARKS).strip()
+        if not segment or not SPEAKABLE.search(segment):
+            return b""
+
+        min_sec = self._min_plausible_sec(segment)
+        best = b""  # 全部尝试都不合格时，至少把最长的那次交出去，不要退化成整段静音
         for attempt in range(retries + 1):
             # Use a temp file since Genie-TTS writes to file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -227,19 +275,46 @@ class TTSEngine:
                 # 注意：genie.tts 在缺少参考音频时只写一条 error 日志就 return，并不抛异常；
                 # 片段全部失败时它也不会调用 _save_session_audio，临时文件会停在 0 字节。
                 # 所以这里必须自己校验产物，不能假定调用成功。
-                genie.tts(
-                    character_name=self._current_character,
-                    text=segment,
-                    play=False,
-                    split_sentence=True,
-                    save_path=tmp_path,
-                )
+                #
+                # 锁只包住这一次调用，不包住整个重试循环、更不包住调用方的整个片段列表：
+                # genie 的 tts_player 是模块级单例（context.current_speaker、内部队列都
+                # 共享），两次 genie.tts() 调用不能同时进行，否则会互相踩状态、串音——
+                # 但「不能同时」指的是调用本身，不要求同一个请求的所有片段之间不被别的
+                # 请求插队。缩小到这里之后，一句长段落不会再占着锁让其他并发请求干等；
+                # 每次调用之间会公平地把锁让给排队的其他线程。
+                # split_sentence=False：不让 genie 再切一刀，一次调用 = 一次生成。
+                # 这不是为了省时间（实测两种模式 rtf 0.772 vs 0.797，在噪声里），
+                # 而是为了让下面的时长校验真正兜得住：genie 内部会把约 11% 的片段
+                # 再切成 2 块，各自独立生成，其中一块塌掉时整段只短了一半左右，
+                # 按整段算的时长校验根本发现不了，那半句就被静默吞掉了。
+                # 关掉之后塌陷只会是整块的，特征极明显（实测塌陷约 0.011 秒/字，
+                # 而正常下限是 0.164），一抓一个准。
+                # 切分的活我们自己在 TextProcessor 里干，MAX_SEGMENT_WIDTH=70
+                # 约合 35 个汉字 ≈ 175 解码步，离 500 步上限还很远。
+                with self._lock:
+                    genie.tts(
+                        character_name=self._current_character,
+                        text=segment,
+                        play=False,
+                        split_sentence=False,
+                        save_path=tmp_path,
+                    )
+                frames = b""
                 if os.path.getsize(tmp_path) > 44:  # 44 = WAV 头的大小
                     with wave.open(tmp_path, "rb") as wf:
                         self._sample_rate = wf.getframerate()
-                        return wf.readframes(wf.getnframes())
+                        frames = wf.readframes(wf.getnframes())
+
+                # GPT-SoVITS 的自回归解码器偶发早停：EOS 提前触发，几百毫秒就收尾，
+                # 整句内容被吞掉。这在 genie 那边不算失败（产物是合法 WAV，只是很短），
+                # 光看文件大小根本发现不了，必须按文本长度校验时长。
+                if len(frames) / 2 / self._sample_rate >= min_sec:
+                    return frames
+                if len(frames) > len(best):
+                    best = frames
                 if attempt < retries:
-                    logger.warning(f"[TTS] Empty output, retrying segment: {segment[:20]}...")
+                    reason = "Empty output" if not frames else "Suspiciously short output (decoder stopped early)"
+                    logger.warning(f"[TTS] {reason}, retrying segment: {segment[:20]}...")
             except Exception as e:
                 logger.error(f"[TTS] Segment synthesis failed ({e}): {segment[:20]}...")
                 if attempt >= retries:
@@ -249,7 +324,10 @@ class TTSEngine:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
-        return b""
+        if best:
+            logger.error(f"[TTS] Segment still too short after {retries + 1} attempts, "
+                         f"audio may be truncated: {segment[:30]}...")
+        return best
 
     def _build_wav(self, frames: bytes) -> bytes:
         """把裸 PCM 帧包成一个完整的 WAV 文件。"""

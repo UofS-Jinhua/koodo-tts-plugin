@@ -78,6 +78,40 @@ check(en_seq.shape[1] > 0 and en_bert.shape[0] == en_seq.shape[1], "English 角�
 check(not en_bert.any(), "English 角色不应该有非零 BERT 特征")
 print("   English: 音素数 %d, bert %s" % (en_seq.shape[1], en_bert.shape))
 
+print("\n=== 5. 空韵母不再让 G2P 崩溃 ===")
+# 「嗯」在 pypinyin 里没有韵母，ToneSandhi 的三声变调对韵母取 [-1] 会抛
+# IndexError。单个「嗯」不崩，后面跟一个字或标点就必崩，而 genie 的 worker
+# 又把异常吞掉只记日志 —— 表现是整段合成静默失败、Koodo 收到 500。
+# 详见 mixed_g2p._guard_empty_finals。
+EMPTY_FINAL_CASES = [
+    "嗯",
+    "嗯，",
+    "嗯。",
+    "嗯，你好。",
+    "“嗯，我跟他们周旋了很多年，至少也有几百年吧。",
+    "呣，好吧。",
+    "噷。",
+]
+for case in EMPTY_FINAL_CASES:
+    try:
+        seq, bert = inference_module.get_phones_and_bert(case, language="Chinese")
+        ok = bert.shape[0] > 0
+        print("   %-26s bert %s" % (case[:24], bert.shape))
+    except Exception as exc:
+        ok = False
+        print("   %-26s %s: %s" % (case[:24], type(exc).__name__, exc))
+    check(ok, "含空韵母字的文本 G2P 失败: %r" % case)
+
+# 正常的三声变调不能被这个补丁误伤
+for case in ["你好，世界。", "老李买了好酒。", "纸老虎", "我想请你帮忙。"]:
+    try:
+        _, bert = inference_module.get_phones_and_bert(case, language="Chinese")
+        ok = bert.shape[0] > 0
+    except Exception:
+        ok = False
+    check(ok, "普通三声变调文本 G2P 失败: %r" % case)
+print("   普通三声变调文本未受影响")
+
 if "--tts" in sys.argv:
     print("\n=== 5. 真实合成 ===")
     from tts_engine import TTSEngine

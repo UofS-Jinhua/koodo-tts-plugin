@@ -1,7 +1,7 @@
 {
   "identifier": "com.local.audiobook.tts",
   "type": "voice",
-  "displayName": "Local Audiobook TTS",
+  "displayName": "Local Genie-TTS (Kiana)",
   "icon": "speaker",
   "version": "1.0.0",
   "config": {},
@@ -10,7 +10,7 @@
       "name": "local_kiana",
       "gender": "female",
       "locale": "zh-CN",
-      "displayName": "Local GPT-SoVITS (Kiana)",
+      "displayName": "Local Genie-TTS (Kiana)",
       "plugin": "com.local.audiobook.tts",
       "config": {}
     }

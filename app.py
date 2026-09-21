@@ -23,7 +23,32 @@ from tts_engine import TTSEngine
 
 # Configure logging
 os.environ["PYTHONIOENCODING"] = "utf-8"
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+# 排查"服务端全 200 但播放突然中断"这类问题时，控制台窗口是唯一的证据来源：
+# 没有时间戳就看不出请求之间隔了多久（例如空闲看门狗是不是刚好在那个点触发了
+# 关闭），而且 start_server.bat 从不把输出重定向到文件——Koodo 拉起的那个窗口
+# 一关，连这唯一的证据也没了。这里补上时间戳，并额外落一份滚动日志文件，
+# 这样窗口关掉之后还能翻 logs/server.log。
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+_log_formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_log_formatter)
+
+# 5MB x 3 份滚动，够存好几天的会话，不会无限增长
+from logging.handlers import RotatingFileHandler
+_file_handler = RotatingFileHandler(
+    LOG_DIR / "server.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_file_handler.setFormatter(_log_formatter)
+
+# force=True 是必须的：上面 `from tts_engine import TTSEngine` 这条 import 链
+# （genie-tts / transformers 等）会在导入期间自己给 root logger 装一个默认
+# StreamHandler。logging.basicConfig() 发现 root logger 已经有 handler 就
+# 直接静默跳过——不加 force=True 的话，下面这行等于什么也没做，我们自己配的
+# 文件 handler 压根不会生效（实测过：没有 force=True 时 server.log 一直是 0 字节）。
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler], force=True)
 logger = logging.getLogger(__name__)
 
 # Global state
@@ -107,6 +132,17 @@ async def idle_watchdog():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start the idle watchdog on server startup."""
+    # uvicorn 自己的 "uvicorn.access" / "uvicorn.error" logger 是独立的，
+    # propagate=False，不会冒泡到 root——就是产生 `"POST ... " 200 OK` 那些行
+    # 的 logger，而且它们默认没有时间戳、也不会落进我们上面配的文件 handler。
+    # uvicorn 会在启动过程中用自己的 dictConfig 覆盖这两个 logger，所以不能在
+    # 模块顶层去接管它们（会被 uvicorn 后来的配置盖掉）；lifespan 的启动阶段
+    # 保证运行在 uvicorn 那次 configure_logging() 之后，这里接管才稳。
+    for _name in ("uvicorn.access", "uvicorn.error"):
+        _ulogger = logging.getLogger(_name)
+        _ulogger.handlers = [_console_handler, _file_handler]
+        _ulogger.propagate = False
+
     watchdog = asyncio.create_task(idle_watchdog())
     yield
     watchdog.cancel()
