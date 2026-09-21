@@ -34,3 +34,6 @@ venv.bak/
 
 # Logs
 *.log
+
+# fp32 weights cache written by ort_memory_patch.py
+ModelCache/

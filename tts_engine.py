@@ -12,6 +12,7 @@ import threading
 import hashlib
 import genie_tts as genie
 import mixed_g2p
+import ort_memory_patch
 from text_processor import TextProcessor
 
 import json
@@ -21,6 +22,13 @@ logger = logging.getLogger(__name__)
 # genie-tts 的中文 G2P 会把句子里夹带的英文整段删掉（详见 mixed_g2p 的模块说明），
 # 必须在加载角色（会给参考文本做 G2P）之前把补丁打上。
 mixed_g2p.apply()
+
+# genie-tts 在内存里把 fp16 权重转成 fp32 再从字节建 session，常驻约 3 倍权重，
+# 而且 8 个 session 各有一个只涨不缩的内存池——只加载 kiana 就占 8.6 GB。改成
+# 加载一次性转好的 fp32 缓存（ModelCache/fp32/）、所有 session 共用一个内存池
+# 后是 4.2 GB，合成速度不变（详见 ort_memory_patch 的模块说明）。session 在加载
+# 角色时创建，所以同样必须在加载任何东西之前打上补丁。
+ort_memory_patch.apply()
 
 # 获取当前文件所在目录的绝对路径，用于计算相对路径
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
